@@ -2,13 +2,13 @@
 	import { onMount } from 'svelte';
 	import { BASE_URL } from '@sudoku/constants';
 	import { modal } from '@sudoku/stores/modal';
-	import { grid } from '@sudoku/stores/grid';
+	import { getStateCode } from '@sudoku/stores/grid';
 	import Clipboard from '../../Utils/Clipboard.svelte';
 
 	export let data = {};
 	export let hideModal;
 
-	const sencode = grid.getSencode($grid);
+	const sencode = getStateCode();
 
 	const link = BASE_URL + '#' + sencode;
 	const encodedLink = encodeURIComponent(link);
