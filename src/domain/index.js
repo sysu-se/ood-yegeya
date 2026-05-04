@@ -70,6 +70,68 @@ export class Sudoku {
     return candidates;
   }
 
+  getHint(row, col) {
+    const candidates = this.getCandidates(row, col);
+    if (candidates.length === 0) return null;
+
+    return {
+      row,
+      col,
+      candidates,
+      value: candidates.length === 1 ? candidates[0] : null,
+      reason: candidates.length === 1 ? 'single-candidate' : 'candidates-only'
+    };
+  }
+
+  getNextStepHint() {
+    let best = null;
+
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        if (this.grid[row][col] !== 0 && this.grid[row][col] !== null) continue;
+
+        const candidates = this.getCandidates(row, col);
+        if (candidates.length === 0) continue;
+
+        if (candidates.length === 1) {
+          return {
+            row,
+            col,
+            candidates,
+            value: candidates[0],
+            reason: 'single-candidate'
+          };
+        }
+      }
+    }
+
+    return best;
+  }
+
+  getExploreHint() {
+    let best = null;
+
+    for (let row = 0; row < 9; row++) {
+      for (let col = 0; col < 9; col++) {
+        if (this.grid[row][col] !== 0 && this.grid[row][col] !== null) continue;
+
+        const candidates = this.getCandidates(row, col);
+        if (candidates.length <= 1) continue;
+
+        if (!best || candidates.length < best.candidates.length) {
+          best = {
+            row,
+            col,
+            candidates,
+            reason: 'explore-candidate'
+          };
+        }
+      }
+    }
+
+    return best;
+  }
+
   // 快速校验当前棋盘是否存在冲突（重复数字）
   hasConflict() {
     // 检查行
@@ -120,10 +182,37 @@ export class Game {
     this.currentSudoku = sudoku;
     this.history = [];
     this.future = [];
-    // Explore 模式相关
     this._inExplore = false;
     this._exploreSnapshot = null; // Sudoku
     this._exploreHistory = []; // 临时记录 explore 中的快照
+    this._failedExploreStates = new Set();
+    this._exploreFailed = false;
+  }
+
+  _gridKey(sudoku) {
+    return JSON.stringify(sudoku.getGrid());
+  }
+
+  _rememberFailedExplorePath() {
+    if (!this._inExplore || !this._exploreSnapshot) return;
+
+    this._failedExploreStates.add(this._gridKey(this._exploreSnapshot));
+    for (const snapshot of this._exploreHistory) {
+      this._failedExploreStates.add(this._gridKey(snapshot));
+    }
+    this._failedExploreStates.add(this._gridKey(this.currentSudoku));
+    this._exploreFailed = true;
+  }
+
+  _refreshExploreFailureState() {
+    if (!this._inExplore) return;
+
+    const currentKey = this._gridKey(this.currentSudoku);
+    this._exploreFailed = this.currentSudoku.hasConflict() || this._failedExploreStates.has(currentKey);
+
+    if (this._exploreFailed && this.currentSudoku.hasConflict()) {
+      this._rememberFailedExplorePath();
+    }
   }
 
   getSudoku() {
@@ -132,10 +221,16 @@ export class Game {
 
   guess(move) {
     if (this._inExplore) {
-      // 在 explore 中，记录到 exploreHistory，不污染主 history
+      if (move.row < 0 || move.row >= 9 || move.col < 0 || move.col >= 9) return false;
       this._exploreHistory.push(this.currentSudoku.clone());
-      // 清空未来栈只在提交主线时处理
-      return this.currentSudoku.guess(move);
+      const success = this.currentSudoku.guess(move);
+      if (!success) {
+        this._exploreHistory.pop();
+        return false;
+      }
+
+      this._refreshExploreFailureState();
+      return true;
     }
 
     this.history.push(this.currentSudoku.clone());
@@ -163,12 +258,88 @@ export class Game {
     return this.future.length > 0;
   }
 
+  getHint(row, col) {
+    return this.currentSudoku.getHint(row, col);
+  }
+
+  getNextStepHint() {
+    return this.currentSudoku.getNextStepHint();
+  }
+
+  getExploreHint() {
+    return this.currentSudoku.getExploreHint();
+  }
+
+  canEnterExplore() {
+    return !this._inExplore && !this.currentSudoku.hasConflict() && this.getNextStepHint() === null;
+  }
+
+  enterExplore() {
+    if (this._inExplore) return false;
+
+    this._exploreSnapshot = this.currentSudoku.clone();
+    this._exploreHistory = [];
+    this._inExplore = true;
+    this._exploreFailed = this._failedExploreStates.has(this._gridKey(this.currentSudoku));
+
+    if (this.currentSudoku.hasConflict()) {
+      this._rememberFailedExplorePath();
+    }
+
+    return true;
+  }
+
+  submitExplore() {
+    if (!this._inExplore || !this._exploreSnapshot) return false;
+    if (this._exploreFailed || this.currentSudoku.hasConflict()) {
+      this._rememberFailedExplorePath();
+      return false;
+    }
+
+    this.history.push(this._exploreSnapshot.clone());
+    this.future = [];
+    this._inExplore = false;
+    this._exploreSnapshot = null;
+    this._exploreHistory = [];
+    this._exploreFailed = false;
+    return true;
+  }
+
+  abandonExplore() {
+    if (!this._inExplore || !this._exploreSnapshot) return false;
+
+    this.currentSudoku = this._exploreSnapshot.clone();
+    this._inExplore = false;
+    this._exploreSnapshot = null;
+    this._exploreHistory = [];
+    this._exploreFailed = false;
+    return true;
+  }
+
+  isInExplore() {
+    return this._inExplore;
+  }
+
+  isExploreFailed() {
+    return this._exploreFailed;
+  }
+
+  getExploreState() {
+    return {
+      active: this._inExplore,
+      failed: this._exploreFailed,
+      canEnter: this.canEnterExplore(),
+      hint: this.getExploreHint()
+    };
+  }
+
   getStateSnapshot() {
     return {
       grid: this.currentSudoku.getGrid(),
       canUndo: this.canUndo(),
       canRedo: this.canRedo(),
-      isSolved: this.currentSudoku.isSolved()
+      isSolved: this.currentSudoku.isSolved(),
+      explore: this.getExploreState()
     };
   }
 
@@ -184,13 +355,13 @@ export class Game {
   // 扩展序列化，记录 explore 的最小信息（不强制）
   toFullJSON() {
     const base = this.toJSON();
-    if (this._inExplore && this._exploreSnapshot) {
-      base.explore = {
-        active: true,
-        snapshot: this._exploreSnapshot.toJSON(),
-        history: this._exploreHistory.map(s => s.toJSON())
-      };
-    }
+    base.explore = {
+      active: this._inExplore,
+      failed: this._exploreFailed,
+      snapshot: this._exploreSnapshot ? this._exploreSnapshot.toJSON() : null,
+      history: this._exploreHistory.map(s => s.toJSON()),
+      failedStates: Array.from(this._failedExploreStates)
+    };
     return base;
   }
 
@@ -208,8 +379,10 @@ export class Game {
     // 恢复 explore（如果有）
     if (json.explore && json.explore.active) {
       game._inExplore = true;
-      game._exploreSnapshot = Sudoku.fromJSON(json.explore.snapshot);
+      game._exploreSnapshot = json.explore.snapshot ? Sudoku.fromJSON(json.explore.snapshot) : null;
       game._exploreHistory = (json.explore.history || []).map(s => Sudoku.fromJSON(s));
+      game._exploreFailed = !!json.explore.failed;
+      game._failedExploreStates = new Set(json.explore.failedStates || []);
     }
 
     return game;

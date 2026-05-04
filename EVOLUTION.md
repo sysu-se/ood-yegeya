@@ -1,35 +1,52 @@
 # EVOLUTION
 
-本文记录了在 Homework 1 基础上完成 Homework 2（Hint & Explore）时的设计决策。
+## 1. 提示功能如何实现
 
-1. Hint 的职责归属
+我把提示拆成两层：
 
-- 候选数计算 (`getCandidates(row,col)`) 放在 `Sudoku` 上实现，因为它属于纯粹的题目逻辑，与会话语义无关。
-- 触发提示并写入结果的操作（例如填入建议值）应由 `Game` 负责协调，因为这类会改变状态的动作会涉及历史记录和撤销语义。
+- 候选提示：由 Sudoku 根据当前棋盘直接计算某个格子的候选数集合。
+- 下一步提示：由 Sudoku 在全盘中寻找唯一候选格，返回可直接填写的下一步。
 
-2. 最小 Hint API
+UI 不再自己拼候选逻辑，只调用领域对象或它的薄适配层。
 
-- `Sudoku#getCandidates(row,col): number[]`：返回某个格子可能填入的数字。
-- `Sudoku#hasConflict(): boolean`：用于 Explore 的快速冲突检测。
+## 2. 提示更属于 Sudoku 还是 Game
 
-3. Explore 模式设计
+我认为候选提示更属于 Sudoku，因为它只依赖棋盘规则。
 
-- 采用的方案是：`Game` 先创建一个临时快照（深拷贝），然后进入 `_inExplore` 状态。
-- 在 Explore 过程中，所有尝试都会记录到 `_exploreHistory`，在用户提交之前不会影响主 `history`。
-- 提交时，将 Explore 视为一次复合操作：把进入 Explore 之前的快照压入 `history`，并清空 `future`。
-- 放弃时，从快照恢复 `currentSudoku`，并丢弃临时历史。
+下一步提示也主要属于 Sudoku，因为本质仍然是从当前盘面推导可填位置。
 
-4. 历史记录演化
+Game 只负责把提示结果放进会话流程，例如消耗 hint 次数、和 UI 状态协作。
 
-- 主 `history` 保持线性；Explore 只是临时产生分支，最终要么合并为一个复合步骤，要么直接丢弃。
-- 这样可以避免引入完整的 DAG 历史结构，同时仍然支持多次尝试式探索。
+## 3. 探索模式如何实现
 
-5. Svelte 适配
+我把探索当作 Game 的一种会话状态，而不是临时 UI 变量。
 
-- 存储层（`src/stores/gamestore.js`）对 UI 组件暴露 `getCandidates`、`enterExplore`、`submitExplore`、`abandonExplore` 和 `isInExplore`。
-- UI 应该通过 `getCandidates` 展示候选数列表，并通过 `enterExplore` / `submitExplore` / `abandonExplore` 管理 Explore 流程。
+进入探索时，Game 先保存一个起点快照。探索期间的填写只作用在探索分支，不污染主 history。提交时把探索起点压入主 history，当前盘面成为主线的新结果；放弃时回滚到起点快照。
 
-6. 备注与后续工作
+## 4. 主局面与探索局面的关系
 
-- 后续可以增加更丰富的 Explore 历史（树状结构），或者在 Explore 内部实现独立的 undo/redo，作为可选增强。
-- 从评分角度看，这里提供的是最小但明确的对象级 Hint & Explore 支持。
+主局面和探索局面不共享可变对象，而是通过快照复制分离。
+
+这样可以避免深拷贝污染和引用串联问题。探索提交时合并到主线；放弃时直接丢弃探索分支。
+
+## 5. history 是否发生变化
+
+主 history 仍然是线性的 Undo / Redo 栈，没有改成树状 DAG。
+
+变化主要发生在探索分支内部：我为探索过程增加了临时快照和失败记忆，但它不并入主 history 的普通回退链中。
+
+## 6. Homework 1 暴露出的局限
+
+Homework 1 里把“棋盘规则”和“会话状态”分得还不够彻底，提示一出现，就很容易把求解逻辑塞回 UI 或 store。
+
+Undo / Redo 也只覆盖单线性历史，到了探索模式以后，需要额外的快照边界和提交/放弃语义。
+
+## 7. 如果重做一次 Homework 1
+
+我会更早把 Sudoku 和 Game 的边界定清楚：
+
+- Sudoku 只负责规则、候选、冲突和推导。
+- Game 只负责会话状态、history 和模式切换。
+- UI 只做事件转发和展示。
+
+这样 Homework 2 的探索和提示会更自然地演进出来。
